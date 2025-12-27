@@ -1,0 +1,190 @@
+/* --- MODERN GLASS UI THEME --- */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap');
+
+body {
+  margin: 0;
+  font-family: 'Poppins', sans-serif;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); /* Purple-Blue Gradient */
+  color: white;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Main Container - Ab yeh pakka center mein rahega */
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;       /* Horizontal Center */
+  justify-content: center;   /* Vertical Center */
+  min-height: 100vh;         /* Full Height */
+  width: 100%;               /* Full Width (Important!) */
+  padding: 20px;
+  text-align: center;
+  backdrop-filter: blur(5px);
+}
+
+h1, h2, h3 {
+  margin-bottom: 20px;
+  font-weight: 800;
+  text-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+
+h1 { font-size: 2.5rem; letter-spacing: 1px; }
+
+/* --- GLASS CARDS (Menu & Game Box) --- */
+.card, .game-box {
+  background: rgba(255, 255, 255, 0.1); /* Transparent White */
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+  padding: 30px;
+  transition: transform 0.3s ease;
+}
+
+/* Menu Specific */
+.menu-grid {
+  display: flex;
+  gap: 25px;
+  flex-wrap: wrap;
+  justify-content: center; /* Items grid ke center mein honge */
+  margin-top: 30px;
+  width: 100%; /* Grid bhi full width lega */
+}
+
+.card {
+  width: 240px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.card:hover {
+  transform: translateY(-10px);
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.card h2 {
+  font-size: 1.4rem;
+  margin: 15px 0 5px;
+}
+
+.icon-large {
+  font-size: 3.5rem;
+  display: block;
+  margin-bottom: 10px;
+  filter: drop-shadow(0 5px 10px rgba(0,0,0,0.2));
+}
+
+/* --- MODERN BUTTONS --- */
+button {
+  background: linear-gradient(to right, #ff416c, #ff4b2b);
+  color: white;
+  border: none;
+  padding: 15px 30px;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 50px;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(255, 75, 43, 0.3);
+  transition: all 0.3s ease;
+  font-family: 'Poppins', sans-serif;
+  margin-top: 20px;
+}
+
+button:hover {
+  transform: scale(1.05);
+  box-shadow: 0 15px 30px rgba(255, 75, 43, 0.5);
+}
+
+button:active {
+  transform: scale(0.95);
+}
+
+.back-btn {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  padding: 10px 20px;
+  font-size: 0.9rem;
+  box-shadow: none;
+}
+
+.back-btn:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* --- SPEED GAME GRID --- */
+.speed-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-top: 25px;
+  /* Grid ko center karne ke liye */
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.num-box {
+  background: white;
+  color: #333;
+  font-weight: 800;
+  font-size: 1.4rem;
+  height: 60px;
+  width: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+  transition: transform 0.2s, background 0.2s;
+}
+
+.num-box:hover {
+  transform: scale(1.1);
+}
+
+.clicked {
+  background: #00b894 !important;
+  color: white !important;
+  opacity: 0.5;
+  pointer-events: none;
+  transform: scale(0.95);
+}
+
+/* --- OPTIONS (Math & Riddle) --- */
+.options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+  margin-top: 20px;
+  width: 100%;
+}
+
+.opt-btn {
+  background: white;
+  color: #333;
+  font-size: 1.2rem;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+  margin: 0;
+}
+
+.opt-btn:hover {
+  background: #f1f2f6;
+  color: #000;
+  transform: translateY(-3px);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.15);
+}
+
+/* --- MOBILE RESPONSIVE --- */
+@media (max-width: 600px) {
+  .speed-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+  .menu-grid {
+    gap: 15px;
+  }
+}
