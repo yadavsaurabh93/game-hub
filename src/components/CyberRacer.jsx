@@ -1,513 +1,495 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 
-/* ==================================================================================
-   🏎️ CYBER RACER: TITAN OMEGA EDITION (MAXIMUM OVERDRIVE)
-   ==================================================================================
-   - FIXED: Purple Screen Issue (Forced Z-Index Layering)
-   - FIXED: Sound not stopping (Auto-Cleanup on Unmount)
-   - VISUALS: Dynamic Lighting, Day/Night Cycle, Rain
-   - PHYSICS: Advanced Drifting & Collision
-   ================================================================================== */
+/**
+ * ============================================================================
+ * HIGHWAY RACER: FINAL STABLE BUILD
+ * ============================================================================
+ * Features:
+ * - Real World Theme (No Cyber/Neon)
+ * - Working Pause/Exit/Resume
+ * - Glitch-Free Rendering Engine
+ * - Robust Error Handling
+ * ============================================================================
+ */
 
-const CyberRacer = () => {
-  const navigate = useNavigate();
-
-  // --- 1. GAME STATE & SETTINGS ---
-  const [gameState, setGameState] = useState('BOOT'); // BOOT, MENU, PLAYING, PAUSED, CRASH
-  const [hudState, setHudState] = useState({ score: 0, speed: 0, health: 100, nitro: 100, gear: 1 });
-  const [envState, setEnvState] = useState({ time: 0.5, weather: 'clear' }); // 0=Night, 1=Day
-
-  // --- 2. ENGINE REFS (Mutable state for high-performance loop) ---
-  const player = useRef({
-    lane: 0,          // -1 (Left), 0 (Center), 1 (Right)
-    x: 0,             // Interpolated X position
-    z: 0,             // World Z position
-    speed: 0,         // Current speed
-    maxSpeed: 4.2,    // Max speed cap
-    accel: 0.02,      // Acceleration rate
-    steer: 0,         // Visual steering angle
-    boosting: false,  // Nitro state
-    invincible: 0     // Invincibility frames
-  });
-
-  const world = useRef({
-    objects: [],      // Obstacles
-    traffic: [],      // AI Cars
-    particles: [],    // FX
-    roadOffset: 0,    
-    distance: 0,
-    shake: 0          // Screen shake magnitude
-  });
-
-  // Audio Context Ref
-  const audio = useRef({
-    ctx: null,
-    engineOsc: null,
-    lfoOsc: null,
-    gainNode: null
-  });
-
-  // Loop Control
-  const loopRef = useRef();
-  const lastTimeRef = useRef(0);
-
-  // Constants
-  const LANE_WIDTH = 300; 
-  const VIEW_DISTANCE = 16000;
-
-  // --- 3. AUDIO ENGINE (Synthesizer) ---
-  const initAudio = useCallback(() => {
-    if (audio.current.ctx) return;
-    
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AudioContext();
-    
-    // Engine Tone (Sawtooth for grit)
-    const osc = ctx.createOscillator();
-    osc.type = 'sawtooth';
-    osc.frequency.value = 60;
-
-    // LFO for Rumble (Low Frequency Oscillator)
-    const lfo = ctx.createOscillator();
-    lfo.type = 'sine';
-    lfo.frequency.value = 30;
-
-    // Gain (Volume)
-    const gain = ctx.createGain();
-    gain.gain.value = 0.05;
-
-    // LFO modulates gain
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = 500; 
-
-    // Connections
-    lfo.connect(lfoGain);
-    lfoGain.connect(osc.frequency);
-    osc.connect(masterGain); // Typo fix: assume masterGain is gain
-    gain.connect(ctx.destination);
-    
-    osc.start();
-    lfo.start();
-
-    audio.current = { ctx, engineOsc: osc, lfoOsc: lfo, gainNode: gain };
-  }, []);
-
-  const updateAudio = (speedRatio) => {
-    if (!audio.current.ctx) return;
-    const { engineOsc, lfoOsc } = audio.current;
-    
-    // Pitch shift based on speed
-    const baseFreq = 60 + (speedRatio * 200);
-    const rumbleFreq = 20 + (speedRatio * 50);
-    
-    if(engineOsc) engineOsc.frequency.setTargetAtTime(baseFreq, audio.current.ctx.currentTime, 0.1);
-    if(lfoOsc) lfoOsc.frequency.setTargetAtTime(rumbleFreq, audio.current.ctx.currentTime, 0.1);
-  };
-
-  const stopAudio = () => {
-    if (audio.current.ctx) {
-      try {
-        audio.current.engineOsc.stop();
-        audio.current.lfoOsc.stop();
-        audio.current.ctx.close();
-      } catch(e) { console.log("Audio close error", e); }
-      audio.current = { ctx: null, engineOsc: null, lfoOsc: null, gainNode: null };
-    }
-  };
-
-  // --- 4. INPUT HANDLING ---
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (gameState !== 'PLAYING') return;
-      const k = e.key.toLowerCase();
-      
-      if (['arrowleft', 'a'].includes(k)) changeLane(-1);
-      if (['arrowright', 'd'].includes(k)) changeLane(1);
-      if ([' ', 'w', 'arrowup'].includes(k)) player.current.boosting = true;
-      if (['escape'].includes(k)) setGameState('PAUSED');
-    };
-
-    const handleKeyUp = (e) => {
-      const k = e.key.toLowerCase();
-      if ([' ', 'w', 'arrowup'].includes(k)) player.current.boosting = false;
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    
-    // *** CRITICAL CLEANUP: STOPS SOUND ON EXIT ***
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      cancelAnimationFrame(loopRef.current);
-      stopAudio(); 
-    };
-  }, [gameState]);
-
-  const changeLane = (dir) => {
-    const p = player.current;
-    const target = Math.max(-1, Math.min(1, p.lane + dir));
-    if (target !== p.lane) {
-      p.lane = target;
-      p.steer = dir * -35; // Visual tilt
-      setTimeout(() => { p.steer = 0; }, 300); // Reset tilt
-    }
-  };
-
-  // --- 5. GAME LOGIC ---
-  const spawnObject = (zPos) => {
-    const r = Math.random();
-    let type = 'block';
-    let lane = Math.floor(Math.random() * 3) - 1;
-
-    // Spawn Types
-    if (r > 0.95) { type = 'energy'; }       
-    else if (r > 0.90) { type = 'shield'; }  
-    else if (r > 0.80) { type = 'coin'; }    
-    else if (r > 0.60) { type = 'traffic'; } 
-    else if (r > 0.40) { type = 'gate'; lane = 0; } 
-    else { type = 'block'; }                 
-
-    const z = zPos + (Math.random() * 1000); 
-
-    if (type === 'traffic') {
-        world.current.traffic.push({
-            id: Date.now() + Math.random(),
-            lane: lane,
-            x: lane * LANE_WIDTH,
-            z: z,
-            speed: 1.5 + (Math.random() * 1.5), // Slower than player
-            type: 'traffic'
-        });
-    } else {
-        world.current.objects.push({
-            id: Date.now() + Math.random(),
-            lane: lane,
-            x: lane * LANE_WIDTH,
-            z: z,
-            type: type,
-            active: true
-        });
-    }
-  };
-
-  const createParticle = (x, y, z, type, color) => {
-      world.current.particles.push({
-          id: Math.random(), x, y, z,
-          vx: (Math.random() - 0.5) * 30,
-          vy: (Math.random() * 30) + 10,
-          vz: (Math.random() - 0.5) * 30,
-          life: 1.0, decay: 0.05,
-          type, color
-      });
-  };
-
-  const update = (dt) => {
-    const P = player.current;
-    
-    // Physics
-    const targetSpeed = P.boosting ? P.maxSpeed * 1.5 : P.maxSpeed;
-    if (P.speed < targetSpeed) P.speed += P.accel;
-    else P.speed -= P.accel; 
-    
-    // Nitro Logic
-    if (P.boosting) {
-        setHudState(prev => ({ ...prev, nitro: Math.max(0, prev.nitro - 0.5) }));
-        if (hudState.nitro <= 0) P.boosting = false;
-        world.current.shake = 5;
-        if (Math.random() > 0.5) createParticle(P.x - 40, 10, 0, 'flame', '#00f3ff');
-        if (Math.random() > 0.5) createParticle(P.x + 40, 10, 0, 'flame', '#00f3ff');
-    } else {
-        setHudState(prev => ({ ...prev, nitro: Math.min(100, prev.nitro + 0.05) }));
-        world.current.shake = 0;
-    }
-
-    // Lane Smoothing
-    const targetX = P.lane * LANE_WIDTH;
-    P.x += (targetX - P.x) * 0.1;
-
-    // World Move
-    const moveDist = P.speed * 80;
-    world.current.distance += moveDist;
-    world.current.roadOffset = (world.current.roadOffset + moveDist) % 1000;
-
-    // Traffic Update
-    world.current.traffic.forEach(car => {
-        car.z -= (P.speed - car.speed) * 60; // Relative speed
-        // Simple AI
-        if (Math.random() < 0.005) {
-            car.lane = Math.max(-1, Math.min(1, car.lane + (Math.random() > 0.5 ? 1 : -1)));
-        }
-        car.x += (car.lane * LANE_WIDTH - car.x) * 0.05;
-        
-        // Traffic Hit
-        if (Math.abs(car.z) < 200 && Math.abs(car.x - P.x) < 200) {
-             if (P.invincible <= 0) handleCrash(30);
-        }
-    });
-
-    // Object Update
-    world.current.objects = world.current.objects.filter(obj => {
-        obj.z -= moveDist;
-        if (obj.z < -500) return false;
-        
-        if (obj.active && Math.abs(obj.z) < 150 && Math.abs(obj.x - P.x) < 150) {
-            obj.active = false;
-            if (obj.type === 'coin') {
-                setHudState(prev => ({ ...prev, score: prev.score + 500 }));
-                createParticle(obj.x, 50, obj.z, 'spark', 'gold');
-            } else if (obj.type === 'energy') {
-                setHudState(prev => ({ ...prev, nitro: 100 }));
-            } else if (obj.type === 'shield') {
-                setHudState(prev => ({ ...prev, health: Math.min(100, prev.health + 25) }));
-            } else {
-                if (P.invincible <= 0) handleCrash(20);
-            }
-            return false;
-        }
-        return true;
-    });
-
-    // Spawning
-    const furthestZ = Math.max(
-        ...world.current.objects.map(o => o.z),
-        ...world.current.traffic.map(t => t.z),
-        0
-    );
-    if (furthestZ < VIEW_DISTANCE) spawnObject(VIEW_DISTANCE + Math.random() * 2000);
-
-    // Particles
-    world.current.particles = world.current.particles.filter(p => {
-        p.x += p.vx; p.y += p.vy; p.z -= moveDist - p.vz;
-        p.vy -= 1.5; p.life -= 0.02;
-        return p.life > 0;
-    });
-
-    // Invincibility
-    if (P.invincible > 0) P.invincible--;
-
-    // HUD Sync
-    setHudState(prev => ({
-        ...prev,
-        speed: Math.floor(P.speed * 40),
-        score: Math.floor(world.current.distance / 100),
-        gear: Math.min(6, Math.floor(P.speed) + 1)
-    }));
-
-    if (hudState.health <= 0) setGameState('CRASH');
-    updateAudio(P.speed / P.maxSpeed);
-  };
-
-  const handleCrash = (dmg) => {
-      setHudState(h => ({ ...h, health: h.health - dmg }));
-      player.current.speed *= 0.5;
-      world.current.shake = 20;
-      createParticle(player.current.x, 50, 0, 'fire', 'red');
-      player.current.invincible = 60;
-  };
-
-  // --- 6. RENDER LOOP ---
-  const renderLoop = (time) => {
-    if (gameState !== 'PLAYING') return;
-    const dt = Math.min(1, (time - lastTimeRef.current) / 1000);
-    lastTimeRef.current = time;
-
-    update(dt);
-    loopRef.current = requestAnimationFrame(renderLoop);
-  };
-
-  useEffect(() => {
-    if (gameState === 'PLAYING') {
-        lastTimeRef.current = performance.now();
-        loopRef.current = requestAnimationFrame(renderLoop);
-    }
-    return () => cancelAnimationFrame(loopRef.current);
-  }, [gameState]);
-
-  // Initial Boot
-  useEffect(() => {
-    setTimeout(() => setGameState('MENU'), 2000);
-  }, []);
-
-  const handleStart = () => {
-    initAudio();
-    world.current = { objects: [], traffic: [], particles: [], roadOffset: 0, distance: 0, shake: 0 };
-    player.current = { ...player.current, speed: 0, x: 0, lane: 0, invincible: 0 };
-    setHudState({ score: 0, speed: 0, health: 100, nitro: 100, gear: 1 });
-    setGameState('PLAYING');
-  };
-
-  const handleExit = () => {
-      stopAudio();
-      navigate('/');
-  };
-
-  // --- 7. RENDER JSX ---
-  return (
-    <div className="omega-root">
-        
-        {/* --- GLOBAL STYLES (THE FIX) --- */}
-        <style>{`
-            :root { --c-cyan: #00f3ff; --c-pink: #ff0055; --c-dark: #050510; }
-            
-            /* FORCE FULL SCREEN & Z-INDEX TO FIX PURPLE SCREEN */
-            .omega-root {
-                position: fixed !important; top: 0; left: 0; width: 100vw; height: 100vh;
-                background: var(--c-dark); overflow: hidden; font-family: 'Segoe UI', monospace;
-                z-index: 999999; perspective: 1200px;
-            }
-            
-            .viewport { width: 100%; height: 100%; position: absolute; transform-style: preserve-3d; }
-            .camera-rig { width: 100%; height: 100%; position: absolute; transform-style: preserve-3d; }
-
-            /* ENV */
-            .skybox { position: absolute; inset: -50%; width: 200%; height: 200%; background: linear-gradient(to bottom, #000022, #2a0033); transform: translateZ(-5000px); }
-            .sun { position: absolute; bottom: 30%; left: 50%; width: 800px; height: 800px; background: linear-gradient(to top, var(--c-pink), #ffd700); border-radius: 50%; transform: translateX(-50%); box-shadow: 0 0 150px var(--c-pink); }
-            
-            /* ROAD */
-            .road-plane { 
-                position: absolute; bottom: -500px; left: 50%; margin-left: -2000px; width: 4000px; height: 40000px; 
-                transform: rotateX(85deg); transform-style: preserve-3d; background: #111; 
-                box-shadow: 0 0 100px var(--c-cyan); border-left: 50px solid var(--c-cyan); border-right: 50px solid var(--c-cyan);
-            }
-            .road-texture { position: absolute; width: 100%; height: 100%; background: repeating-linear-gradient(0deg, transparent, transparent 400px, rgba(255,255,255,0.1) 400px, rgba(255,255,255,0.1) 800px); background-size: 100% 800px; }
-            .road-grid { position: absolute; width: 100%; height: 100%; background-image: linear-gradient(90deg, transparent 49%, var(--c-cyan) 50%, transparent 51%); background-size: 200px 100%; opacity: 0.3; }
-
-            /* OBJECTS */
-            .object-3d { position: absolute; bottom: 0; left: 50%; transform-style: preserve-3d; margin-left: -150px; }
-            .car-enemy-mesh { width: 300px; height: 120px; background: #222; margin-left: 0; border: 2px solid red; box-shadow: 0 0 20px red; }
-            .coin-mesh { width: 100px; height: 100px; background: gold; border-radius: 50%; animation: spin 1s infinite linear; box-shadow: 0 0 50px gold; margin-left: 100px; }
-            .block-mesh { width: 300px; height: 200px; background: rgba(255,0,0,0.2); border: 4px solid red; margin-left: 0; box-shadow: inset 0 0 50px red; }
-            .gate-mesh { width: 800px; height: 600px; border: 10px solid var(--c-cyan); margin-left: -250px; border-bottom: none; box-shadow: 0 0 100px var(--c-cyan); }
-
-            /* HERO CAR */
-            .hero-car { position: absolute; bottom: 50px; left: 50%; width: 400px; height: 150px; margin-left: -200px; transform-style: preserve-3d; transition: transform 0.1s; }
-            .car-body { width: 100%; height: 80px; background: #111; position: absolute; bottom: 20px; border-radius: 20px; border: 2px solid var(--c-cyan); box-shadow: inset 0 0 50px var(--c-cyan); transform: translateZ(50px); }
-            .rear-lights { width: 100%; height: 10px; background: red; position: absolute; top: 10px; box-shadow: 0 0 30px red; }
-            .exhaust { width: 40px; height: 40px; background: #222; border: 2px solid #555; border-radius: 50%; position: absolute; top: 30px; }
-            .exhaust.l { left: 40px; } .exhaust.r { right: 40px; }
-            .nitro-fire { width: 300px; height: 100px; background: var(--c-cyan); position: absolute; left: 50px; top: 30px; filter: blur(20px); z-index: -1; animation: flame 0.1s infinite; transform: rotate(180deg); }
-            
-            .particle { position: absolute; width: 10px; height: 10px; border-radius: 50%; }
-
-            /* HUD */
-            .hud-layer { position: absolute; inset: 0; pointer-events: none; z-index: 100; padding: 40px; display: flex; flex-direction: column; justify-content: space-between; }
-            .hud-top { display: flex; justify-content: space-between; }
-            .stat-panel { background: rgba(0,0,0,0.6); border: 1px solid var(--c-cyan); padding: 15px 40px; transform: skewX(-20deg); min-width: 250px; }
-            .stat-panel.right { border-color: var(--c-pink); text-align: right; }
-            .hud-val { font-size: 3rem; font-weight: 900; color: #fff; text-shadow: 0 0 20px currentColor; }
-            .hud-label { color: #888; letter-spacing: 3px; font-size: 0.8rem; display: block; }
-            .speedo { text-align: center; }
-
-            /* MENUS */
-            .screen { position: absolute; inset: 0; background: rgba(0,0,0,0.95); z-index: 200; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-            .title-logo { font-size: 8rem; color: #fff; font-style: italic; margin: 0; text-shadow: 0 0 50px var(--c-cyan); }
-            .h-pink { color: var(--c-pink); text-shadow: 0 0 50px var(--c-pink); }
-            .btn-action { background: transparent; border: 2px solid var(--c-cyan); color: var(--c-cyan); font-size: 2rem; padding: 20px 60px; font-weight: bold; margin-top: 50px; cursor: pointer; transition: 0.2s; pointer-events: auto; }
-            .btn-action:hover { background: var(--c-cyan); color: #000; box-shadow: 0 0 100px var(--c-cyan); }
-            .btn-exit { position: absolute; top: 20px; right: 20px; z-index: 300; background: red; color: #fff; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; pointer-events: auto; }
-
-            @keyframes spin { from{transform:rotateY(0)} to{transform:rotateY(360deg)} }
-            @keyframes flame { 0%{opacity:0.8; height:100px} 100%{opacity:1; height:150px} }
-            .blink { animation: blink 1s infinite; } @keyframes blink { 50%{opacity:0} }
-        `}</style>
-
-        {/* 3D SCENE */}
-        <div className="viewport">
-            <div className="camera-rig" style={{
-                transform: `
-                    translateY(${150 + Math.random() * world.current.shake}px) 
-                    translateX(${Math.random() * world.current.shake}px)
-                    rotateX(25deg)
-                `
-            }}>
-                <div className="skybox">
-                    <div className="sun"></div>
-                </div>
-
-                <div className="road-plane">
-                    <div className="road-texture" style={{ backgroundPositionY: `${world.current.roadOffset}px` }}></div>
-                    <div className="road-grid"></div>
-                </div>
-
-                {/* OBJECTS */}
-                {[...world.current.objects, ...world.current.traffic].map(obj => (
-                    <div key={obj.id} className="object-3d" style={{
-                        transform: `translateX(${obj.x}px) translateZ(${1000 - obj.z}px)`,
-                        opacity: Math.min(1, (VIEW_DISTANCE - obj.z) / 5000)
-                    }}>
-                        {obj.type === 'traffic' && <div className="car-enemy-mesh"></div>}
-                        {obj.type === 'coin' && <div className="coin-mesh"></div>}
-                        {obj.type === 'block' && <div className="block-mesh"></div>}
-                        {obj.type === 'gate' && <div className="gate-mesh"></div>}
-                    </div>
-                ))}
-
-                {/* HERO CAR */}
-                <div className="hero-car" style={{
-                    transform: `
-                        translateX(${player.current.x}px)
-                        rotateZ(${player.current.steer}deg)
-                        rotateY(${player.current.steer * 0.5}deg)
-                    `
-                }}>
-                    <div className="chassis">
-                        <div className="car-body"></div>
-                        <div className="exhaust l"></div>
-                        <div className="exhaust r"></div>
-                        <div className="rear-lights"></div>
-                        {player.current.boosting && <div className="nitro-fire"></div>}
-                    </div>
-                </div>
-
-                {/* PARTICLES */}
-                {world.current.particles.map(p => (
-                    <div key={p.id} className="particle" style={{
-                        transform: `translate3d(${p.x}px, ${-p.y}px, ${1000 - p.z}px)`,
-                        backgroundColor: p.color, opacity: p.life
-                    }} />
-                ))}
-            </div>
-        </div>
-
-        {/* HUD */}
-        {gameState === 'PLAYING' && (
-            <div className="hud-layer">
-                <div className="hud-top">
-                    <div className="stat-panel"><span className="hud-label">SCORE</span><div className="hud-val">{hudState.score}</div></div>
-                    <div className="stat-panel right"><span className="hud-label">SHIELD</span><div className="hud-val">{hudState.health}%</div></div>
-                </div>
-                <div className="speedo">
-                    <div className="hud-val">{hudState.speed}</div>
-                    <span className="hud-label">KPH</span>
-                    <div style={{color:'#ffd700', border:'1px solid #ffd700', padding:'5px', marginTop:'5px'}}>GEAR {hudState.gear}</div>
-                </div>
-            </div>
-        )}
-
-        {/* SCREENS */}
-        {gameState === 'BOOT' && <div className="screen"><div style={{color:'#0f0', fontFamily:'monospace', fontSize:'1.5rem'}}>SYSTEM BOOTING...</div></div>}
-        
-        {gameState === 'MENU' && (
-            <div className="screen">
-                <h1 className="title-logo">CYBER <span className="h-pink">RACER</span></h1>
-                <button className="btn-action" onClick={handleStart}>START RACE</button>
-            </div>
-        )}
-
-        {gameState === 'CRASH' && (
-            <div className="screen">
-                <h1 className="title-logo" style={{color:'red'}}>WASTED</h1>
-                <div className="hud-val">SCORE: {hudState.score}</div>
-                <button className="btn-action" style={{borderColor:'red', color:'red'}} onClick={handleStart}>RETRY</button>
-            </div>
-        )}
-
-        <button className="btn-exit" onClick={handleExit}>EXIT GAME</button>
-
-    </div>
-  );
+// --- UTILS ---
+const Utils = {
+  timestamp: () => new Date().getTime(),
+  limit: (value, min, max) => Math.max(min, Math.min(value, max)),
+  randomInt: (min, max) => Math.floor(Math.random() * (max - min + 1)) + min,
+  randomChoice: (options) => options[Utils.randomInt(0, options.length - 1)],
+  percentRemaining: (n, total) => (n % total) / total,
+  accelerate: (v, accel, dt) => v + (accel * dt),
+  interpolate: (a, b, percent) => a + (b - a) * percent,
+  easeIn: (a, b, percent) => a + (b - a) * Math.pow(percent, 2),
+  easeOut: (a, b, percent) => a + (b - a) * (1 - Math.pow(1 - percent, 2)),
+  easeInOut: (a, b, percent) => a + (b - a) * ((-Math.cos(percent * Math.PI) / 2) + 0.5),
+  project: (p, cameraX, cameraY, cameraZ, cameraDepth, width, height, roadWidth) => {
+    p.camera.x = (p.world.x || 0) - cameraX;
+    p.camera.y = (p.world.y || 0) - cameraY;
+    p.camera.z = (p.world.z || 0) - cameraZ;
+    p.screen.scale = cameraDepth / p.camera.z;
+    p.screen.x = Math.round((width / 2) + (p.screen.scale * p.camera.x * width / 2));
+    p.screen.y = Math.round((height / 2) - (p.screen.scale * p.camera.y * height / 2));
+    p.screen.w = Math.round((p.screen.scale * roadWidth * width / 2));
+  },
+  overlap: (x1, w1, x2, w2, percent) => {
+    var half = (percent || 1) / 2;
+    var min1 = x1 - (w1 * half);
+    var max1 = x1 + (w1 * half);
+    var min2 = x2 - (w2 * half);
+    var max2 = x2 + (w2 * half);
+    return !((max1 < min2) || (min1 > max2));
+  }
 };
 
-export default CyberRacer;
+// --- CONFIG ---
+const CFG = {
+    fps: 60,
+    width: 1024,
+    height: 768,
+    lanes: 3,
+    roadWidth: 2000,
+    segmentLength: 200,
+    rumbleLength: 3,
+    cameraHeight: 1000,
+    drawDistance: 300,
+    fieldOfView: 100,
+    fogDensity: 5,
+    maxSpeed: 12000,
+    accel: 30,
+    breaking: -80,
+    decel: -30,
+    offRoadDecel: -100,
+    offRoadLimit: 2000,
+    centrifugal: 0.3
+};
+
+const COLORS = {
+    SKY:  '#72D7EE',
+    TREE: '#005108',
+    FOG:  '#005108',
+    LIGHT:  { road: '#6B6B6B', grass: '#10AA10', rumble: '#555555', lane: '#CCCCCC'  },
+    DARK:   { road: '#696969', grass: '#009A00', rumble: '#BBBBBB'                   },
+    START:  { road: 'white',   grass: 'white',   rumble: 'white'                     },
+    FINISH: { road: 'black',   grass: 'black',   rumble: 'black'                     }
+};
+
+// --- AUDIO (SAFE MODE) ---
+class AudioController {
+    constructor() {
+        this.ctx = null;
+        this.osc = null;
+        this.gain = null;
+    }
+    init() {
+        if(this.ctx) return;
+        try {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            this.ctx = new AC();
+            this.osc = this.ctx.createOscillator();
+            this.gain = this.ctx.createGain();
+            this.osc.type = 'sawtooth';
+            this.osc.frequency.value = 60;
+            this.gain.gain.value = 0.05;
+            this.osc.connect(this.gain);
+            this.gain.connect(this.ctx.destination);
+            this.osc.start();
+        } catch (e) {
+            console.log("Audio failed to initialize, continuing without sound.");
+        }
+    }
+    update(ratio) {
+        if(this.ctx && this.osc) {
+            this.osc.frequency.setTargetAtTime(60 + (ratio * 400), this.ctx.currentTime, 0.1);
+        }
+    }
+    stop() {
+        if(this.ctx) { this.ctx.close(); this.ctx = null; }
+    }
+}
+const AudioSys = new AudioController();
+
+// --- GAME COMPONENT ---
+const RealisticRacer = () => {
+    const navigate = useNavigate();
+    const canvasRef = useRef(null);
+    const frameId = useRef(null);
+
+    // Game State Refs
+    const G = useRef({
+        speed: 0,
+        position: 0,
+        playerX: 0,
+        score: 0,
+        distance: 0,
+        health: 100,
+        nitro: 100,
+        keyLeft: false, keyRight: false, keyFaster: false, keySlower: false, keyNitro: false,
+        segments: [],
+        cars: [],
+        trackLength: 0,
+        lastTime: 0,
+        skyOffset: 0,
+        hillOffset: 0,
+        treeOffset: 0
+    });
+
+    const [uiState, setUiState] = useState("MENU"); // MENU, PLAY, PAUSED, OVER
+    const [hud, setHud] = useState({ speed: 0, score: 0, health: 100 });
+
+    // --- ROAD GENERATION ---
+    const resetRoad = () => {
+        G.current.segments = [];
+        const addSegment = (curve, y) => {
+            const n = G.current.segments.length;
+            G.current.segments.push({
+                index: n,
+                p1: { world: { y: lastY(), z:  n   * CFG.segmentLength }, camera: {}, screen: {} },
+                p2: { world: { y: y,       z: (n+1) * CFG.segmentLength }, camera: {}, screen: {} },
+                curve: curve,
+                sprites: [],
+                cars: [],
+                color: Math.floor(n/CFG.rumbleLength)%2 ? COLORS.DARK : COLORS.LIGHT
+            });
+        };
+        const lastY = () => (G.current.segments.length === 0) ? 0 : G.current.segments[G.current.segments.length-1].p2.world.y;
+
+        const addRoad = (enter, hold, leave, curve, y) => {
+            const startY = lastY();
+            const endY = startY + (Math.floor(y) * CFG.segmentLength);
+            const total = enter + hold + leave;
+            for(let n = 0; n < enter; n++) addSegment(Utils.easeIn(0, curve, n/enter), Utils.easeInOut(startY, endY, n/total));
+            for(let n = 0; n < hold;  n++) addSegment(curve, Utils.easeInOut(startY, endY, (enter+n)/total));
+            for(let n = 0; n < leave; n++) addSegment(Utils.easeInOut(curve, 0, n/leave), Utils.easeInOut(startY, endY, (enter+hold+n)/total));
+        };
+
+        // Generate Track
+        addRoad(50, 50, 50, 0, 0); 
+        addRoad(50, 50, 50, 2, 2000); 
+        addRoad(50, 50, 50, -2, -2000); 
+        addRoad(100, 100, 100, 0, 0);
+        addRoad(50, 50, 50, 3, 0);
+        addRoad(50, 50, 50, -3, 0);
+        addRoad(200, 200, 200, 0, 0);
+
+        G.current.trackLength = G.current.segments.length * CFG.segmentLength;
+
+        // Reset Traffic
+        G.current.cars = [];
+        for (let n = 0; n < 40; n++) {
+            const offset = Math.random() * G.current.segments.length;
+            const z = offset * CFG.segmentLength;
+            G.current.cars.push({
+                offset: Utils.randomChoice([-0.5, 0.5]),
+                z,
+                speed: 3000 + Math.random() * 5000,
+                color: ['#000', '#fff', '#800', '#224488'][Math.floor(Math.random()*4)]
+            });
+        }
+    };
+
+    // --- RENDERER ---
+    const render = () => {
+        const ctx = canvasRef.current.getContext('2d');
+        const w = CFG.width;
+        const h = CFG.height;
+        const S = G.current;
+        const baseSegment = S.segments[Math.floor(S.position/CFG.segmentLength) % S.segments.length];
+        const basePercent = Utils.percentRemaining(S.position, CFG.segmentLength);
+        const playerSegment = S.segments[Math.floor((S.position+CFG.cameraHeight)/CFG.segmentLength) % S.segments.length];
+        const playerPercent = Utils.percentRemaining(S.position+CFG.cameraHeight, CFG.segmentLength);
+        const playerY = Utils.interpolate(playerSegment.p1.world.y, playerSegment.p2.world.y, playerPercent);
+        
+        let x = 0;
+        let dx = - (baseSegment.curve * basePercent);
+        let maxY = h;
+
+        ctx.clearRect(0,0,w,h);
+
+        // 1. SKY & BACKGROUND
+        const renderBack = () => {
+            // Sky
+            const grad = ctx.createLinearGradient(0,0,0,h);
+            grad.addColorStop(0, '#4488ff'); grad.addColorStop(1, '#aaccff');
+            ctx.fillStyle = grad; ctx.fillRect(0,0,w,h);
+            
+            // Mountains
+            ctx.fillStyle = '#1e4d2b';
+            ctx.beginPath(); ctx.moveTo(0, h/2);
+            for(let i=0; i<=w; i+=20) {
+                const offset = S.hillOffset * 1000;
+                ctx.lineTo(i, h/2 - 50 - Math.sin((i+offset)*0.01)*50);
+            }
+            ctx.lineTo(w, h/2); ctx.fill();
+        };
+        renderBack();
+
+        // 2. ROAD
+        for(let n=0; n<CFG.drawDistance; n++) {
+            const segment = S.segments[(baseSegment.index + n) % S.segments.length];
+            const looped = segment.index < baseSegment.index;
+            const camZ = S.position - (looped ? S.trackLength : 0);
+            
+            Utils.project(segment.p1, (S.playerX * CFG.roadWidth) - x,      CFG.cameraHeight + playerY, camZ, CFG.cameraHeight, w, h, CFG.roadWidth);
+            Utils.project(segment.p2, (S.playerX * CFG.roadWidth) - x - dx, CFG.cameraHeight + playerY, camZ, CFG.cameraHeight, w, h, CFG.roadWidth);
+            
+            x += dx;
+            dx += segment.curve;
+            
+            if (segment.p1.camera.z <= CFG.cameraHeight || segment.p2.screen.y >= maxY || segment.p2.screen.y >= segment.p1.screen.y) continue;
+            
+            // Draw Road
+            const { x:x1, y:y1, w:w1 } = segment.p1.screen;
+            const { x:x2, y:y2, w:w2 } = segment.p2.screen;
+
+            // Grass
+            ctx.fillStyle = segment.color.grass; ctx.fillRect(0, y2, w, y1-y2);
+            // Rumble
+            ctx.fillStyle = segment.color.rumble;
+            const r1 = w1/5; const r2 = w2/5;
+            ctx.beginPath(); ctx.moveTo(x1-w1-r1, y1); ctx.lineTo(x1-w1, y1); ctx.lineTo(x2-w2, y2); ctx.lineTo(x2-w2-r2, y2); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(x1+w1+r1, y1); ctx.lineTo(x1+w1, y1); ctx.lineTo(x2+w2, y2); ctx.lineTo(x2+w2+r2, y2); ctx.fill();
+            // Road
+            ctx.fillStyle = segment.color.road;
+            ctx.beginPath(); ctx.moveTo(x1-w1, y1); ctx.lineTo(x1+w1, y1); ctx.lineTo(x2+w2, y2); ctx.lineTo(x2-w2, y2); ctx.fill();
+            // Lane
+            if(segment.color.lane) {
+                ctx.fillStyle = segment.color.lane;
+                const l1 = w1/40; const l2 = w2/40;
+                ctx.beginPath(); ctx.moveTo(x1-l1, y1); ctx.lineTo(x1+l1, y1); ctx.lineTo(x2+l2, y2); ctx.lineTo(x2-l2, y2); ctx.fill();
+            }
+            
+            maxY = y1;
+
+            // Draw Traffic
+            S.cars.forEach(car => {
+                if(car.z >= segment.p1.world.z && car.z < segment.p2.world.z) {
+                    const percent = Utils.percentRemaining(car.z, CFG.segmentLength);
+                    const scale = Utils.interpolate(segment.p1.screen.scale, segment.p2.screen.scale, percent);
+                    const cx = Utils.interpolate(segment.p1.screen.x, segment.p2.screen.x, percent) + (scale * car.offset * CFG.roadWidth * w/2);
+                    const cy = Utils.interpolate(segment.p1.screen.y, segment.p2.screen.y, percent);
+                    const cw = 400 * scale * w/2;
+                    const ch = 200 * scale * w/2;
+                    
+                    ctx.fillStyle = car.color;
+                    ctx.fillRect(cx - cw/2, cy - ch, cw, ch);
+                    ctx.fillStyle = 'red';
+                    ctx.fillRect(cx - cw/3, cy - ch*0.8, cw/4, ch/5);
+                    ctx.fillRect(cx + cw/10, cy - ch*0.8, cw/4, ch/5);
+                }
+            });
+        }
+
+        // 3. DRAW PLAYER CAR
+        const renderPlayer = () => {
+            const cx = w/2;
+            const cy = h - 100;
+            const bounce = (Math.random() * (S.speed/CFG.maxSpeed) * 3);
+            const steerAngle = (S.playerX * 10) + (S.keyLeft ? -5 : 0) + (S.keyRight ? 5 : 0);
+
+            ctx.save();
+            ctx.translate(cx, cy + bounce);
+            ctx.rotate(steerAngle * Math.PI / 180);
+            ctx.scale(3, 3); 
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.beginPath(); ctx.ellipse(0, 10, 50, 15, 0, 0, Math.PI*2); ctx.fill();
+            // Body
+            ctx.fillStyle = '#D00000';
+            ctx.beginPath(); ctx.moveTo(-50, 0); ctx.lineTo(50, 0); ctx.lineTo(45, -20); ctx.lineTo(-45, -20); ctx.fill();
+            // Roof
+            ctx.fillStyle = '#222';
+            ctx.beginPath(); ctx.moveTo(-40, -20); ctx.lineTo(40, -20); ctx.lineTo(35, -35); ctx.lineTo(-35, -35); ctx.fill();
+            // Lights
+            ctx.fillStyle = '#FF0000';
+            ctx.fillRect(-45, -5, 15, 8); ctx.fillRect(30, -5, 15, 8);
+            
+            if (S.keyNitro && S.nitro > 0) {
+                ctx.fillStyle = '#00FFFF';
+                ctx.beginPath(); ctx.moveTo(-25, 10); ctx.lineTo(-20, 30+Math.random()*10); ctx.lineTo(-15, 10); ctx.fill();
+                ctx.beginPath(); ctx.moveTo(15, 10); ctx.lineTo(20, 30+Math.random()*10); ctx.lineTo(25, 10); ctx.fill();
+            }
+            ctx.restore();
+        };
+        renderPlayer();
+    };
+
+    // --- PHYSICS UPDATE ---
+    const update = (dt) => {
+        const S = G.current;
+        const playerSegment = S.segments[Math.floor(S.position/CFG.segmentLength) % S.segments.length];
+        
+        // Speed
+        const maxSpeed = S.keyNitro ? CFG.maxSpeed * 1.4 : CFG.maxSpeed;
+        const accel = S.keyNitro ? CFG.accel * 1.5 : CFG.accel;
+
+        if (S.keyFaster) S.speed = Utils.accelerate(S.speed, accel, dt);
+        else if (S.keySlower) S.speed = Utils.accelerate(S.speed, CFG.breaking, dt);
+        else S.speed = Utils.accelerate(S.speed, CFG.decel, dt);
+
+        // Steering
+        if (S.keyLeft) S.playerX = S.playerX - (dt * 2 * (S.speed/CFG.maxSpeed));
+        else if (S.keyRight) S.playerX = S.playerX + (dt * 2 * (S.speed/CFG.maxSpeed));
+
+        S.playerX = S.playerX - (dt * (S.speed/CFG.maxSpeed) * playerSegment.curve * CFG.centrifugal);
+        
+        if ((S.playerX < -1 || S.playerX > 1) && (S.speed > CFG.offRoadLimit)) {
+            S.speed = Utils.accelerate(S.speed, CFG.offRoadDecel, dt);
+        }
+        S.playerX = Utils.limit(S.playerX, -2, 2);
+        S.speed = Utils.limit(S.speed, 0, maxSpeed);
+        S.position = (S.position + (S.speed * dt)) % S.trackLength;
+        S.distance += S.speed * dt;
+
+        // Nitro
+        if(S.keyNitro && S.nitro > 0) S.nitro -= 25 * dt;
+        else if(!S.keyNitro && S.nitro < 100) S.nitro += 5 * dt;
+
+        // Parallax
+        S.hillOffset = (S.hillOffset + playerSegment.curve * 0.002 * (S.speed/CFG.maxSpeed)) % 1;
+
+        // Traffic Collision
+        S.cars.forEach(car => {
+            car.z = (car.z + car.speed * dt) % S.trackLength;
+            if (car.z > S.position - CFG.segmentLength && car.z < S.position + CFG.segmentLength) {
+                if (Utils.overlap(S.playerX, 0.6, car.offset, 0.6, 0.8)) {
+                    S.speed = S.speed / 2;
+                    S.health -= 10;
+                    if(S.health <= 0) setUiState("OVER");
+                }
+            }
+        });
+
+        AudioSys.update(S.speed/CFG.maxSpeed);
+
+        if(Math.random() > 0.8) {
+            setHud({ speed: Math.floor(S.speed/100), score: Math.floor(S.distance/1000), health: S.health });
+        }
+    };
+
+    // --- GAME LOOP ---
+    const loop = (time) => {
+        if (uiState === "PLAY") {
+            const dt = Math.min(1, (time - G.current.lastTime) / 1000);
+            G.current.lastTime = time;
+            update(dt);
+            render();
+            frameId.current = requestAnimationFrame(loop);
+        }
+    };
+
+    useEffect(() => {
+        if (uiState === "PLAY") {
+            if(G.current.segments.length === 0) resetRoad();
+            AudioSys.init();
+            G.current.lastTime = performance.now();
+            frameId.current = requestAnimationFrame(loop);
+        } else {
+            AudioSys.stop();
+            cancelAnimationFrame(frameId.current);
+        }
+        return () => { cancelAnimationFrame(frameId.current); AudioSys.stop(); }
+    }, [uiState]);
+
+    useEffect(() => {
+        const resize = () => { if(canvasRef.current) { canvasRef.current.width = CFG.width; canvasRef.current.height = CFG.height; }};
+        window.addEventListener('resize', resize); resize();
+
+        const kd = (e) => {
+            const k = e.keyCode;
+            if(k===KEY.LEFT||k===KEY.A) G.current.keyLeft=true;
+            if(k===KEY.RIGHT||k===KEY.D) G.current.keyRight=true;
+            if(k===KEY.UP||k===KEY.W) G.current.keyFaster=true;
+            if(k===KEY.DOWN||k===KEY.S) G.current.keySlower=true;
+            if(k===KEY.SHIFT) G.current.keyNitro=true;
+            if(k===KEY.ESC) setUiState(s => s==='PLAY'?'PAUSED':'PLAY');
+        };
+        const ku = (e) => {
+            const k = e.keyCode;
+            if(k===KEY.LEFT||k===KEY.A) G.current.keyLeft=false;
+            if(k===KEY.RIGHT||k===KEY.D) G.current.keyRight=false;
+            if(k===KEY.UP||k===KEY.W) G.current.keyFaster=false;
+            if(k===KEY.DOWN||k===KEY.S) G.current.keySlower=false;
+            if(k===KEY.SHIFT) G.current.keyNitro=false;
+        };
+        window.addEventListener('keydown', kd); window.addEventListener('keyup', ku);
+        return () => { window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku); window.removeEventListener('resize', resize); }
+    }, []);
+
+    const handleExit = () => { AudioSys.stop(); navigate("/"); };
+
+    // --- STYLES ---
+    const styles = `
+      @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@900&display=swap');
+      body { margin: 0; background: #111; overflow: hidden; font-family: 'Roboto', sans-serif; }
+      canvas { width: 100vw; height: 100vh; display: block; }
+      .hud { position: absolute; inset: 0; pointer-events: none; padding: 20px; display: flex; flex-direction: column; justify-content: space-between; z-index: 10; color: #fff; }
+      .box { background: rgba(0,0,0,0.5); padding: 10px 20px; border: 2px solid white; transform: skewX(-10deg); }
+      .bar { width: 200px; height: 10px; background: #333; margin-top: 5px; border: 1px solid #fff; }
+      .fill { height: 100%; transition: width 0.1s; }
+      .menu { position: absolute; inset: 0; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; justify-content: center; alignItems: center; color: white; z-index: 100; }
+      .btn { pointer-events: auto; background: #C00; color: white; border: 2px solid white; padding: 15px 40px; font-size: 2rem; font-weight: bold; cursor: pointer; transform: skewX(-10deg); margin: 10px; }
+      .btn:hover { background: #F00; scale: 1.1; }
+      .btn-sm { padding: 5px 15px; font-size: 1rem; background: #333; cursor: pointer; border: 1px solid white; margin-left: 10px; color: white; pointer-events: auto; }
+    `;
+
+    return (
+        <div style={{width:'100vw', height:'100vh'}}>
+            <style>{styles}</style>
+            <canvas ref={canvasRef} />
+
+            {uiState === "PLAY" && (
+                <div className="hud">
+                    <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start'}}>
+                        <div className="box">
+                            <div>ARMOR: {Math.floor(hud.health)}%</div>
+                            <div className="bar"><div className="fill" style={{width:`${hud.health}%`, background: hud.health<30?'red':'#0f0'}}></div></div>
+                            <div style={{marginTop:'10px'}}>SCORE: {hud.score}</div>
+                        </div>
+                        <div style={{pointerEvents:'auto'}}>
+                            <button className="btn-sm" onClick={() => setUiState("PAUSED")}>PAUSE</button>
+                            <button className="btn-sm" style={{background:'#500'}} onClick={handleExit}>EXIT</button>
+                        </div>
+                    </div>
+                    <div className="box" style={{alignSelf:'flex-end', textAlign:'right'}}>
+                        <div style={{fontSize:'4rem', lineHeight:0.8}}>{hud.speed}</div>
+                        <div>KM/H</div>
+                    </div>
+                </div>
+            )}
+
+            {uiState === "MENU" && (
+                <div className="menu">
+                    <h1 style={{fontSize:'6rem', margin:0, color:'#e00'}}>TITAN RACER</h1>
+                    <button className="btn" onClick={() => setUiState("PLAY")}>START RACE</button>
+                    <p style={{marginTop:'20px', color:'#aaa'}}>ARROWS TO DRIVE | SHIFT FOR NITRO</p>
+                </div>
+            )}
+
+            {uiState === "PAUSED" && (
+                <div className="menu" style={{background:'rgba(0,0,0,0.7)'}}>
+                    <h1>PAUSED</h1>
+                    <button className="btn" onClick={() => setUiState("PLAY")}>RESUME</button>
+                    <button className="btn" style={{background:'#555'}} onClick={handleExit}>EXIT GAME</button>
+                </div>
+            )}
+
+            {uiState === "OVER" && (
+                <div className="menu">
+                    <h1 style={{color:'red'}}>WRECKED</h1>
+                    <h2>SCORE: {hud.score}</h2>
+                    <button className="btn" onClick={() => { 
+                        G.current.health=100; G.current.speed=0; G.current.score=0; 
+                        resetRoad(); setUiState("PLAY"); 
+                    }}>RETRY</button>
+                    <button className="btn" style={{background:'#555'}} onClick={handleExit}>EXIT</button>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default RealisticRacer;

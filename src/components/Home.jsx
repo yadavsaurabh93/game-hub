@@ -88,19 +88,50 @@ function Home() {
           <p>Geometry Challenge</p>
         </div>
 
-        {/* Game 12: Reflex Grid (Added properly to match others) */}
+        {/* Game 12 */}
         <div className="card" onClick={() => navigate('/reflex')}>
           <span className="icon-large">⚡</span>
           <h2>Reflex Grid</h2>
           <p>Click the blink!</p>
         </div>
 
-        <div className="card" onClick={() => navigate('/racer')}>
+        <div className="card" onClick={() => navigate('/cyberracer')}>
           <span className="icon-large">🏎️</span>
           <h2>Neon Racer</h2>
           <p>Infinite 3D Drift</p>
         </div>
 
+         <div className="card" onClick={() => navigate('/jungle')}>
+           <span className="icon-large">🌳</span>
+           <h2>Jungle Flip</h2>
+           <p>Gravity Defying Run</p>
+        </div>
+
+        <div className="card" onClick={() => navigate('/wood-carver')}>
+           <span className="icon-large">🪵</span>
+           <h2>Wood Carver</h2>
+           <p>THE WOOD CARVER</p>
+        </div>
+
+        <div className="card tower" onClick={() => navigate('/tower')}>
+            <span className="icon-large">🏗️</span>
+            <h2>Tower Master</h2>
+            <p>BUILD TO THE SKY</p>
+        </div>
+
+        {/* Game 17: HIGHWAY RACER (Fixed Here) */}
+        <div className="card" onClick={() => navigate('/racer')}>
+            <span className="icon-large">🏎️</span>
+            <h2>Highway Racer</h2>
+            <p>DODGE TRAFFIC</p>
+        </div>
+        
+        <div className="card" onClick={() => navigate('/bottle-flip')}>
+            <span className="icon-large">🍾</span>
+            <h2>Bottle Flip</h2>
+            <p>PERFECT LANDING</p>
+        </div>
+        
       </div>
     </div>
   );
