@@ -14,6 +14,11 @@ const chessController = require('../controllers/chessController');
 const laserController = require('../controllers/laserController');
 const angleController = require('../controllers/angleController');
 const reflexController = require('../controllers/reflexController');
+const jungleController = require('../controllers/jungleController');
+const woodCarverController = require('../controllers/woodCarverController');
+const towerMasterController = require('../controllers/towerMasterController');
+const highwayRacerController = require('../controllers/highwayRacerController'); // ✅ ADDED THIS
+
 // Routes
 router.get('/speed/:level', speedController.getSpeedLevel);
 router.get('/math/:level', mathController.getMathQuestion);
@@ -27,4 +32,12 @@ router.get('/chess', chessController.getChessConfig);
 router.get('/laser/:level', laserController.getLaserConfig);
 router.get('/angle', angleController.getAngleConfig);
 router.get('/reflex', reflexController.getReflexConfig);
+router.get('/jungle/config', jungleController.getJungleConfig);
+router.get('/wood-carver/config', woodCarverController.getWoodCarverConfig);
+router.post('/tower-master/score', towerMasterController.saveHighScore);
+
+// ✅ Highway Racer Route Added
+router.get('/racer/config', highwayRacerController.getRacerConfig);
+router.post('/racer/score', highwayRacerController.saveHighScore);
+
 module.exports = router;
